@@ -4,9 +4,11 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,6 +28,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -64,6 +68,7 @@ import com.example.tenantshield.ui.screens.inspect.InspectScreen
 import com.example.tenantshield.ui.screens.owners.OwnersScreen
 import com.example.tenantshield.ui.screens.profile.ProfileScreen
 import com.example.tenantshield.ui.screens.reports.ReportsScreen
+import com.example.tenantshield.ui.theme.OnSurfaceVariant
 import com.example.tenantshield.ui.theme.Primary
 import com.example.tenantshield.ui.theme.TenantShieldTheme
 import com.example.tenantshield.ui.viewmodel.InspectionViewModel
@@ -110,6 +115,7 @@ fun TenantShieldApp(inspectionViewModel: InspectionViewModel = viewModel()) {
     var previousDestination by rememberSaveable { mutableStateOf<AppDestination?>(null) }
     var overlayScreen by rememberSaveable { mutableStateOf(OverlayScreen.NONE) }
     var showLoginWarning by remember { mutableStateOf(false) }
+    val showServerBusy = inspectionUiState.showServerBusy
 
     // Auto-dismiss login warning after 1 second, then redirect to login
     LaunchedEffect(showLoginWarning) {
@@ -255,6 +261,59 @@ fun TenantShieldApp(inspectionViewModel: InspectionViewModel = viewModel()) {
                         color = Color.White,
                         fontWeight = FontWeight.Bold
                     )
+                }
+            }
+        }
+        // Server busy popup
+        if (showServerBusy) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .background(Color.Black.copy(alpha = 0.5f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .padding(horizontal = 32.dp)
+                        .fillMaxWidth()
+                        .background(Color.White, RoundedCornerShape(16.dp))
+                        .padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "Oops!",
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = Primary,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "There are so many users using the AI agent on the server right now. Please come back later again. Sorry!",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = OnSurfaceVariant,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(24.dp))
+                        Button(
+                            onClick = {
+                                inspectionViewModel.cancelSession()
+                                currentDestination = AppDestination.HOME
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Primary,
+                                contentColor = Color.White
+                            )
+                        ) {
+                            Text(
+                                text = "GO BACK HOME",
+                                style = MaterialTheme.typography.labelLarge,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
                 }
             }
         }

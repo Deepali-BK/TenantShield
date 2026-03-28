@@ -37,6 +37,7 @@ class InspectionViewModel(application: Application) : AndroidViewModel(applicati
         val isListening: Boolean = false,
         val isSpeaking: Boolean = false,
         val errorMessage: String? = null,
+        val showServerBusy: Boolean = false,
         val conversationMessages: List<ConversationMessage> = emptyList(),
         val lastUserTranscript: String = "", // Last STT result, editable by user
         val awaitingUserConfirmation: Boolean = false // True when user can edit transcript
@@ -91,7 +92,14 @@ class InspectionViewModel(application: Application) : AndroidViewModel(applicati
             }
 
             override fun onError(agentId: String, message: String) {
-                _uiState.update { it.copy(errorMessage = "[$agentId] $message") }
+                val isOverloaded = message.contains("503") || message.contains("overloaded")
+                        || message.contains("high demand") || message.contains("RESOURCE_EXHAUSTED")
+                        || message.contains("unavailable", ignoreCase = true)
+                if (isOverloaded) {
+                    _uiState.update { it.copy(showServerBusy = true, errorMessage = null) }
+                } else {
+                    _uiState.update { it.copy(errorMessage = "[$agentId] $message") }
+                }
             }
 
             override fun onVoiceOutput(text: String) {
