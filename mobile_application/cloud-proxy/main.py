@@ -1,5 +1,5 @@
 """
-TenantShield Cloud Run Proxy — handles Gemini Live API with ADC.
+TenantShield Cloud Run Proxy — handles Gemini API with ADC.
 The Android app calls this service instead of connecting directly to Vertex AI.
 No API keys or service account files needed — Cloud Run uses ADC automatically.
 """
@@ -7,6 +7,7 @@ No API keys or service account files needed — Cloud Run uses ADC automatically
 import os
 import json
 import uuid
+import traceback
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -25,8 +26,7 @@ app.add_middleware(
 
 PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "crucial-bucksaw-371623")
 REGION = os.environ.get("GOOGLE_CLOUD_REGION", "us-central1")
-LIVE_MODEL = "gemini-2.0-flash-live-001"
-REST_MODEL = "gemini-2.0-flash"
+MODEL = "gemini-2.0-flash"
 
 # Initialize the Gemini client with ADC (automatic on Cloud Run)
 client = genai.Client(
@@ -35,7 +35,7 @@ client = genai.Client(
     location=REGION,
 )
 
-# In-memory session storage (for conversation history)
+# In-memory session storage (conversation history per session)
 sessions = {}
 
 
@@ -59,7 +59,7 @@ class SendMessageResponse(BaseModel):
 class AnalyzeImagesRequest(BaseModel):
     system_prompt: str
     user_message: str
-    images_base64: List[str]  # List of base64-encoded JPEG images
+    images_base64: List[str]
 
 
 class AnalyzeImagesResponse(BaseModel):
@@ -77,45 +77,22 @@ class GenerateResponse(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "project": PROJECT_ID, "region": REGION}
+    return {"status": "ok", "project": PROJECT_ID, "region": REGION, "model": MODEL}
 
 
 @app.post("/session/start", response_model=StartSessionResponse)
-async def start_session(req: StartSessionRequest):
-    """Start a new Live API conversation session."""
+def start_session(req: StartSessionRequest):
+    """Start a new conversation session (stores system prompt and history)."""
     session_id = str(uuid.uuid4())
-
-    try:
-        # Create a Live API session
-        live_session = client.aio.live.connect(
-            model=LIVE_MODEL,
-            config=types.LiveConnectConfig(
-                response_modalities=["TEXT"],
-                system_instruction=types.Content(
-                    parts=[types.Part(text=req.system_prompt)]
-                ),
-            ),
-        )
-
-        sessions[session_id] = {
-            "session": live_session,
-            "system_prompt": req.system_prompt,
-            "history": [],
-        }
-
-        return StartSessionResponse(session_id=session_id)
-    except Exception as e:
-        # Fall back to REST-based session if Live API fails
-        sessions[session_id] = {
-            "session": None,  # No live session — use REST fallback
-            "system_prompt": req.system_prompt,
-            "history": [],
-        }
-        return StartSessionResponse(session_id=session_id)
+    sessions[session_id] = {
+        "system_prompt": req.system_prompt,
+        "history": [],
+    }
+    return StartSessionResponse(session_id=session_id)
 
 
 @app.post("/session/send", response_model=SendMessageResponse)
-async def send_message(req: SendMessageRequest):
+def send_message(req: SendMessageRequest):
     """Send a message in an existing conversation session."""
     if req.session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -124,64 +101,36 @@ async def send_message(req: SendMessageRequest):
     session_data["history"].append({"role": "user", "text": req.message})
 
     try:
-        live_session = session_data.get("session")
-
-        if live_session is not None:
-            # Use Live API session
-            async with live_session as session:
-                await session.send(
-                    input=types.LiveClientContent(
-                        turns=[types.Content(
-                            role="user",
-                            parts=[types.Part(text=req.message)]
-                        )],
-                        turn_complete=True,
-                    ),
-                    end_of_turn=True,
+        # Build conversation contents
+        contents = []
+        for entry in session_data["history"]:
+            contents.append(
+                types.Content(
+                    role=entry["role"],
+                    parts=[types.Part(text=entry["text"])],
                 )
+            )
 
-                response_text = ""
-                async for msg in session.receive():
-                    if msg.text:
-                        response_text += msg.text
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=session_data["system_prompt"],
+                response_mime_type="application/json",
+            ),
+        )
 
-                session_data["history"].append({"role": "model", "text": response_text})
-                return SendMessageResponse(response_text=response_text)
-        else:
-            # REST fallback
-            return await _rest_conversation(session_data)
+        response_text = response.text
+        session_data["history"].append({"role": "model", "text": response_text})
+        return SendMessageResponse(response_text=response_text)
 
     except Exception as e:
-        # Fall back to REST on any Live API error
-        session_data["session"] = None
-        return await _rest_conversation(session_data)
-
-
-async def _rest_conversation(session_data):
-    """Fallback: use REST generateContent with conversation history."""
-    contents = []
-    for entry in session_data["history"]:
-        contents.append(types.Content(
-            role=entry["role"],
-            parts=[types.Part(text=entry["text"])],
-        ))
-
-    response = client.models.generate_content(
-        model=REST_MODEL,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction=session_data["system_prompt"],
-            response_mime_type="application/json",
-        ),
-    )
-
-    response_text = response.text
-    session_data["history"].append({"role": "model", "text": response_text})
-    return SendMessageResponse(response_text=response_text)
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/session/end")
-async def end_session(session_id: str):
+def end_session(session_id: str):
     """End a conversation session."""
     if session_id in sessions:
         del sessions[session_id]
@@ -189,49 +138,63 @@ async def end_session(session_id: str):
 
 
 @app.post("/analyze", response_model=AnalyzeImagesResponse)
-async def analyze_images(req: AnalyzeImagesRequest):
+def analyze_images(req: AnalyzeImagesRequest):
     """Analyze images using Gemini multimodal (for Inspection Agent)."""
     import base64
 
-    parts = [types.Part(text=req.user_message)]
+    try:
+        parts = [types.Part(text=req.user_message)]
 
-    for img_b64 in req.images_base64:
-        img_bytes = base64.b64decode(img_b64)
-        parts.append(types.Part(
-            inline_data=types.Blob(
-                mime_type="image/jpeg",
-                data=img_bytes,
+        for img_b64 in req.images_base64:
+            img_bytes = base64.b64decode(img_b64)
+            parts.append(
+                types.Part(
+                    inline_data=types.Blob(
+                        mime_type="image/jpeg",
+                        data=img_bytes,
+                    )
+                )
             )
-        ))
 
-    response = client.models.generate_content(
-        model=REST_MODEL,
-        contents=[types.Content(role="user", parts=parts)],
-        config=types.GenerateContentConfig(
-            system_instruction=req.system_prompt,
-            response_mime_type="application/json",
-        ),
-    )
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=[types.Content(role="user", parts=parts)],
+            config=types.GenerateContentConfig(
+                system_instruction=req.system_prompt,
+                response_mime_type="application/json",
+            ),
+        )
 
-    return AnalyzeImagesResponse(response_text=response.text)
+        return AnalyzeImagesResponse(response_text=response.text)
+
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/generate", response_model=GenerateResponse)
-async def generate(req: GenerateRequest):
+def generate(req: GenerateRequest):
     """Simple text generation (for Filing Agent)."""
-    response = client.models.generate_content(
-        model=REST_MODEL,
-        contents=[types.Content(
-            role="user",
-            parts=[types.Part(text=req.user_message)],
-        )],
-        config=types.GenerateContentConfig(
-            system_instruction=req.system_prompt,
-            response_mime_type="application/json",
-        ),
-    )
+    try:
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=[
+                types.Content(
+                    role="user",
+                    parts=[types.Part(text=req.user_message)],
+                )
+            ],
+            config=types.GenerateContentConfig(
+                system_instruction=req.system_prompt,
+                response_mime_type="application/json",
+            ),
+        )
 
-    return GenerateResponse(response_text=response.text)
+        return GenerateResponse(response_text=response.text)
+
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":
