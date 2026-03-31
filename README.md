@@ -31,3 +31,6 @@ See [mobile_application/](mobile_application/) for setup instructions.
 ## Web Application
 
 See [web_application/](web_application/) for details.
+
+## 🎤 Pitch Deck
+[View the slides on Figma](https://www.figma.com/make/v4GXZ31KxlCPodeUds8b8l/Create-Google-Style-Presentation--Copy-)
