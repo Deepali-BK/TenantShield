@@ -33,4 +33,4 @@ See [mobile_application/](mobile_application/) for setup instructions.
 See [web_application/](web_application/) for details.
 
 ## 🎤 Pitch Deck
-[View the slides on Figma]([(https://drawer-flight-05961676.figma.site)])
+[View the slides on Figma](https://drawer-flight-05961676.figma.site)
